@@ -1,0 +1,16 @@
+.git
+.github
+build
+dist
+lib
+res
+langs
+src
+tools
+README.md
+LICENSE
+*.jar
+*.jad
+*.class
+out.map
+.env

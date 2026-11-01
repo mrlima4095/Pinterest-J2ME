@@ -1,0 +1,370 @@
+package pinterest.ui;
+
+import java.util.Stack;
+import javax.microedition.lcdui.Alert;
+import javax.microedition.lcdui.AlertType;
+import javax.microedition.lcdui.Command;
+import javax.microedition.lcdui.CommandListener;
+import javax.microedition.lcdui.Display;
+import javax.microedition.lcdui.Displayable;
+import javax.microedition.lcdui.Gauge;
+import javax.microedition.midlet.MIDlet;
+import pinterest.PinterestMIDlet;
+import pinterest.store.Configuration;
+import pinterest.store.JsonRecordStore;
+import pinterest.util.Lang;
+import pinterest.util.Utils;
+
+public class Navigator {
+  private final Stack navStack;
+  private final MIDlet midlet;
+  private Displayable beforeAlert;
+  private Displayable rootView;
+  private Displayable dialogReturn;
+
+  public Navigator(MIDlet midlet) {
+    this.midlet = midlet;
+    this.navStack = new Stack();
+    this.beforeAlert = null;
+  }
+
+  /** Replaces the whole navigation stack with {@code view} as the new root screen. */
+  public void setRoot(final Displayable view) {
+    if (view == null) {
+      return;
+    }
+    Display.getDisplay(this.midlet)
+        .callSerially(
+            new Runnable() {
+              public void run() {
+                navStack.removeAllElements();
+                beforeAlert = null;
+                dialogReturn = null;
+                rootView = view;
+                Display.getDisplay(midlet).setCurrent(view);
+              }
+            });
+  }
+
+  public void forward(final Displayable newView) {
+    if (newView == null) {
+      return;
+    }
+    Display.getDisplay(this.midlet)
+        .callSerially(
+            new Runnable() {
+              public void run() {
+                Display display = Display.getDisplay(midlet);
+                Displayable current = display.getCurrent();
+                if (newView instanceof Alert) {
+                  if (current != null && !(current instanceof Alert)) {
+                    beforeAlert = current;
+                  }
+                  Alert alert = (Alert) newView;
+                  if (beforeAlert != null) {
+                    display.setCurrent(alert, beforeAlert);
+                  } else {
+                    display.setCurrent(alert);
+                  }
+                } else {
+                  if (current instanceof Alert) {
+                    if (beforeAlert != null) {
+                      navStack.push(beforeAlert);
+                    } else if (rootView != null) {
+                      navStack.push(rootView);
+                    }
+                    beforeAlert = null;
+                  } else if (current != null) {
+                    navStack.push(current);
+                  } else if (rootView != null) {
+                    navStack.push(rootView);
+                  }
+                  if (rootView == null) {
+                    rootView =
+                        (current != null && !(current instanceof Alert)) ? current : newView;
+                  }
+                  display.setCurrent(newView);
+                }
+              }
+            });
+  }
+
+  public void back() {
+    Display.getDisplay(this.midlet)
+        .callSerially(
+            new Runnable() {
+              public void run() {
+                if (navStack.isEmpty()) {
+                  Display display = Display.getDisplay(midlet);
+                  Displayable current = display.getCurrent();
+                  if (rootView != null
+                      && current != null
+                      && current != rootView
+                      && !(current instanceof Alert)) {
+                    display.setCurrent(rootView);
+                    beforeAlert = null;
+                    return;
+                  }
+                  PinterestMIDlet app = PinterestMIDlet.getInstance();
+                  if (app != null) {
+                    app.exitApp();
+                  } else {
+                    JsonRecordStore.flushAll();
+                    midlet.notifyDestroyed();
+                  }
+                  return;
+                }
+                Displayable previous = (Displayable) navStack.pop();
+                Display.getDisplay(midlet).setCurrent(previous);
+                beforeAlert = null;
+              }
+            });
+  }
+
+  /**
+   * Pops the current view and shows an alert over the view underneath in one serial action. Calling
+   * {@link #back()} and then {@link #showAlert(String, AlertType)} separately is unsafe on devices
+   * where {@code Display.setCurrent} is asynchronous: the alert can capture the view being closed
+   * as its return target, leaving the user on the old screen with corrupted back history.
+   */
+  public void backAndShowAlert(String message, AlertType type) {
+    if (message == null) {
+      back();
+      return;
+    }
+    final String text = message;
+    final AlertType alertType = type;
+    Display.getDisplay(this.midlet)
+        .callSerially(
+            new Runnable() {
+              public void run() {
+                Display display = Display.getDisplay(midlet);
+                Displayable previous;
+                if (!navStack.isEmpty()) {
+                  previous = (Displayable) navStack.pop();
+                } else {
+                  previous = rootView;
+                }
+                beforeAlert = null;
+                Alert alert = new Alert(null, text, null, alertType);
+                alert.setTimeout(Configuration.ALERT_TIMEOUT);
+                if (previous != null) {
+                  display.setCurrent(alert, previous);
+                } else {
+                  display.setCurrent(alert);
+                }
+              }
+            });
+  }
+
+  public Displayable getPrevious() {
+    if (navStack.isEmpty()) {
+      return null;
+    }
+    return (Displayable) navStack.peek();
+  }
+
+  public void popTo(final Displayable target) {
+    if (target == null) {
+      return;
+    }
+    Display.getDisplay(this.midlet)
+        .callSerially(
+            new Runnable() {
+              public void run() {
+                while (!navStack.isEmpty() && navStack.peek() != target) {
+                  navStack.pop();
+                }
+                if (!navStack.isEmpty() && navStack.peek() == target) {
+                  navStack.pop();
+                }
+                beforeAlert = null;
+                Display.getDisplay(midlet).setCurrent(target);
+              }
+            });
+  }
+
+  public void clear() {
+    navStack.removeAllElements();
+    beforeAlert = null;
+    rootView = null;
+    dialogReturn = null;
+  }
+
+  /**
+   * Shows a transient dialog (password prompt, small form) over the current view without changing
+   * navigation history, so closing it returns to exactly the screen that opened it.
+   */
+  public void showDialog(final Displayable dialog) {
+    if (dialog == null) {
+      return;
+    }
+    Display.getDisplay(this.midlet)
+        .callSerially(
+            new Runnable() {
+              public void run() {
+                Display display = Display.getDisplay(midlet);
+                Displayable current = display.getCurrent();
+                if (current != null && !(current instanceof Alert)) {
+                  dialogReturn = current;
+                } else if (beforeAlert != null) {
+                  dialogReturn = beforeAlert;
+                } else if (!navStack.isEmpty()) {
+                  dialogReturn = (Displayable) navStack.peek();
+                }
+                display.setCurrent(dialog);
+              }
+            });
+  }
+
+  /** Closes a transient dialog and restores the view underneath. */
+  public void closeDialog() {
+    restoreDialogAndThen(null);
+  }
+
+  /** Closes a transient dialog, restores the view underneath, then runs an action. */
+  public void restoreDialogAndThen(final Runnable action) {
+    Display.getDisplay(this.midlet)
+        .callSerially(
+            new Runnable() {
+              public void run() {
+                Display display = Display.getDisplay(midlet);
+                Displayable target = dialogReturn;
+                if (target == null) {
+                  target = !navStack.isEmpty() ? (Displayable) navStack.peek() : rootView;
+                }
+                if (target != null) {
+                  display.setCurrent(target);
+                }
+                beforeAlert = null;
+                dialogReturn = null;
+                if (action != null) {
+                  action.run();
+                }
+              }
+            });
+  }
+
+  /** The view a transient dialog will return to, used to anchor alerts without pushing history. */
+  public Displayable getDialogReturn() {
+    return dialogReturn;
+  }
+
+  public void callSerially(Runnable r) {
+    if (r == null) {
+      return;
+    }
+    Display.getDisplay(this.midlet).callSerially(r);
+  }
+
+  /** The displayable currently shown, used to check that a screen is still on top. */
+  public Displayable getCurrent() {
+    return Display.getDisplay(this.midlet).getCurrent();
+  }
+
+  public void showAlert(String message, AlertType type) {
+    if (message == null) {
+      return;
+    }
+    Alert a = new Alert(null, message, null, type);
+    a.setTimeout(Configuration.ALERT_TIMEOUT);
+    forward(a);
+  }
+
+  public void showAlert(String message, AlertType type, final Displayable d) {
+    if (message == null) {
+      return;
+    }
+    final Alert a = new Alert(null, message, null, type);
+    a.setTimeout(Configuration.ALERT_TIMEOUT);
+    Display.getDisplay(this.midlet)
+        .callSerially(
+            new Runnable() {
+              public void run() {
+                Display.getDisplay(midlet).setCurrent(a, d);
+              }
+            });
+  }
+
+  public void showConfirmationAlert(String message, Runnable onOk) {
+    showConfirmationAlert(message, onOk, AlertType.INFO);
+  }
+
+  public void showConfirmationAlert(String message, final Runnable onOk, AlertType type) {
+    if (message == null || onOk == null) {
+      return;
+    }
+    Alert a = new Alert(null, message, null, type);
+    a.addCommand(Commands.ok());
+    a.addCommand(Commands.cancel());
+    a.setTimeout(Alert.FOREVER);
+    a.setCommandListener(
+        new CommandListener() {
+          public void commandAction(Command c, Displayable d) {
+            if (c == Commands.ok()) {
+              onOk.run();
+            } else if (c == Commands.cancel()) {
+              dismissAlert();
+            }
+          }
+        });
+    forward(a);
+  }
+
+  public void showLoadingAlert(String s) {
+    showLoadingAlert(s, null);
+  }
+
+  /**
+   * Shows a loading alert. When the user cancels it, {@code onCancel} runs after the alert closes,
+   * so callers can clear their own "loading" flag instead of staying blocked.
+   */
+  public void showLoadingAlert(String s, final Runnable onCancel) {
+    if (Utils.isJ2MELoader()) {
+      return;
+    }
+    Alert a = new Alert(null, s == null ? Lang.tr("status.loading") : s, null, null);
+    a.addCommand(Commands.cancel());
+    a.setIndicator(new Gauge(null, false, Gauge.INDEFINITE, Gauge.CONTINUOUS_RUNNING));
+    a.setTimeout(Alert.FOREVER);
+    a.setCommandListener(
+        new CommandListener() {
+          public void commandAction(Command c, Displayable d) {
+            if (c == Commands.cancel()) {
+              PinterestMIDlet.cancelOperation();
+              dismissAlert();
+              if (onCancel != null) {
+                onCancel.run();
+              }
+            }
+          }
+        });
+    forward(a);
+  }
+
+  public void dismissAlert() {
+    Display.getDisplay(this.midlet)
+        .callSerially(
+            new Runnable() {
+              public void run() {
+                Display display = Display.getDisplay(midlet);
+                Displayable current = display.getCurrent();
+                if (!(current instanceof Alert)) {
+                  return;
+                }
+                if (beforeAlert != null) {
+                  display.setCurrent(beforeAlert);
+                  beforeAlert = null;
+                } else if (!navStack.isEmpty()) {
+                  Displayable previous = (Displayable) navStack.pop();
+                  display.setCurrent(previous);
+                } else if (rootView != null) {
+                  display.setCurrent(rootView);
+                } else {
+                  JsonRecordStore.flushAll();
+                  midlet.notifyDestroyed();
+                }
+              }
+            });
+  }
+}

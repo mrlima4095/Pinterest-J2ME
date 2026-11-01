@@ -1,0 +1,10 @@
+services:
+  pinterest-proxy:
+    build: .
+    image: pinterest-j2me-proxy:latest
+    ports:
+      - "${PORT:-8080}:80"
+    environment:
+      PROXY_ALLOWED_HOSTS: "${PROXY_ALLOWED_HOSTS:-pinimg.com}"
+      PROXY_MAX_BYTES: "${PROXY_MAX_BYTES:-8388608}"
+    restart: unless-stopped
